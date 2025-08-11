@@ -23,12 +23,17 @@ jobs:
       - name: Set Lighthouse URLs
         run: |
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            # For PR: Use a preview URL pattern (customize based on your deployment)
-            PR_NUMBER=${{ github.event.number }}
-            echo "LIGHTHOUSE_URLS=https://lighthouse-test-pr-${PR_NUMBER}.vercel.app/,https://lighthouse-test-pr-${PR_NUMBER}.vercel.app/handla/mobiltelefoner,https://lighthouse-test-pr-${PR_NUMBER}.vercel.app/support" >> $GITHUB_ENV
+            # For PR: Use Vercel preview URL pattern
+            BRANCH_NAME="${{ github.head_ref }}"
+            # Replace special characters and convert to lowercase for Vercel URL
+            BRANCH_SLUG=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9-]/-/g' | tr '[:upper:]' '[:lower:]')
+            BASE_URL="https://lighthouse-test-git-${BRANCH_SLUG}-hayder86als-projects.vercel.app"
+            echo "LIGHTHOUSE_URLS=${BASE_URL}/,${BASE_URL}/handla/mobiltelefoner,${BASE_URL}/support" >> $GITHUB_ENV
+            echo "Testing deployment URL: ${BASE_URL}"
           else
             # For main branch: Use production URLs
             echo "LIGHTHOUSE_URLS=https://tre.se/,https://www.tre.se/handla/mobiltelefoner,https://www.tre.se/support" >> $GITHUB_ENV
+            echo "Testing production URLs"
           fi
 
       - name: Run Lighthouse CI with Assertions
