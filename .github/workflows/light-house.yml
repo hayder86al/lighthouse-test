@@ -4,7 +4,7 @@ on:
     branches:
       - "main"
   schedule:
-    - cron: "*/1 5-19 * * 1-5" # Runs every 1 min working days between 06:00 and 20:00 Swedish time
+    - cron: "*/1 4-18 * * 1-5" # Runs every 1 min working days between 06:00 and 20:00 Swedish time (UTC+2)
   workflow_dispatch:
 jobs:
   lighthouse:
@@ -18,6 +18,5 @@ jobs:
             https://tre.se/
             https://www.tre.se/handla/mobiltelefoner
             https://www.tre.se/support
-          budgetPath: ./budget.json # test performance budgets
           uploadArtifacts: true # save results as an action artifacts
           temporaryPublicStorage: true # upload lighthouse report to the temporary storage
