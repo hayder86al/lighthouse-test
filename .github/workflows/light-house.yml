@@ -2,7 +2,7 @@ name: Lighthouse Performance Testing
 on:
   push:
     branches:
-      - "main"(UTC+2)
+      - "main"
   workflow_dispatch:
 jobs:
   lighthouse:
