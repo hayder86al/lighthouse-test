@@ -1,0 +1,47 @@
+name: Lighthouse Performance Testing (Manual URL)
+on:
+  pull_request:
+    branches:
+      - "main"
+  workflow_dispatch:
+    inputs:
+      deployment_url:
+        description: "Deployment URL to test (without trailing slash)"
+        required: true
+        default: "https://your-preview-deployment.vercel.app"
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.15.x
+
+      - name: Set Lighthouse URLs
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            BASE_URL="${{ github.event.inputs.deployment_url }}"
+          else
+            # Use Vercel preview URL pattern based on branch name
+            BRANCH_NAME="${{ github.head_ref }}"
+            BRANCH_SLUG=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9-]/-/g' | tr '[:upper:]' '[:lower:]')
+            BASE_URL="https://lighthouse-test-git-${BRANCH_SLUG}-hayder86als-projects.vercel.app"
+          fi
+          echo "LIGHTHOUSE_URLS=${BASE_URL}/,${BASE_URL}/handla/mobiltelefoner,${BASE_URL}/support" >> $GITHUB_ENV
+          echo "Testing deployment URL: ${BASE_URL}"
+
+      - name: Run Lighthouse CI with Assertions
+        run: lhci autorun
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+
+      - name: Upload Lighthouse artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighthouse-reports
+          path: .lighthouseci/
