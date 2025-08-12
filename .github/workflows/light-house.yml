@@ -8,6 +8,12 @@ on:
       - "main"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  deployments: read
+  statuses: read
+  checks: read
+
 jobs:
   # Wait for Vercel deployment to complete
   wait-for-vercel:
