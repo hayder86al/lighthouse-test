@@ -15,13 +15,20 @@ permissions:
   checks: read
 
 jobs:
-  # Wait for Vercel deployment to complete
-  wait-for-vercel:
+  lighthouse:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
-    outputs:
-      preview-url: ${{ steps.get-vercel-url.outputs.preview-url }}
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.15.x
+
       - name: Wait for Vercel deployment and get URL
         id: get-vercel-url
         run: |
@@ -64,13 +71,13 @@ jobs:
               if [ "$TARGET_URL" != "" ] && [ "$TARGET_URL" != "null" ] && [ "$STATUS_STATE" = "success" ]; then
                 echo "Deployment ready! URL: $TARGET_URL"
                 echo "preview-url=$TARGET_URL" >> $GITHUB_OUTPUT
-                exit 0
+                break
               elif [ "$TARGET_URL" != "" ] && [ "$TARGET_URL" != "null" ]; then
                 echo "Deployment found but not ready yet. State: $STATUS_STATE"
                 echo "preview-url=$TARGET_URL" >> $GITHUB_OUTPUT
                 # Wait a bit more and then proceed anyway
                 sleep 30
-                exit 0
+                break
               fi
             fi
             
@@ -78,27 +85,14 @@ jobs:
             sleep 30
           done
 
-          echo "Failed to get deployment URL after 12 minutes"
-          exit 1
-
-  lighthouse:
-    runs-on: ubuntu-latest
-    needs: [wait-for-vercel]
-    if: github.event_name == 'pull_request' && needs.wait-for-vercel.result == 'success' && needs.wait-for-vercel.outputs.preview-url != ''
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-
-      - name: Install Lighthouse CI
-        run: npm install -g @lhci/cli@0.15.x
+          if [ -z "$TARGET_URL" ] || [ "$TARGET_URL" = "null" ]; then
+            echo "Failed to get deployment URL after 12 minutes"
+            exit 1
+          fi
 
       - name: Wait for site to be ready
         run: |
-          PREVIEW_URL="${{ needs.wait-for-vercel.outputs.preview-url }}"
+          PREVIEW_URL="${{ steps.get-vercel-url.outputs.preview-url }}"
           echo "Waiting for site to be ready at: $PREVIEW_URL"
 
           # Try to access the site with Vercel protection bypass header
@@ -132,8 +126,8 @@ jobs:
 
       - name: Set Lighthouse URLs
         run: |
-          # Use the actual Vercel preview URL from the previous job
-          PREVIEW_URL="${{ needs.wait-for-vercel.outputs.preview-url }}"
+          # Use the actual Vercel preview URL from the previous step
+          PREVIEW_URL="${{ steps.get-vercel-url.outputs.preview-url }}"
           # Test both home page and support page
           echo "LIGHTHOUSE_URLS=${PREVIEW_URL},${PREVIEW_URL}/support" >> $GITHUB_ENV
           echo "Testing Vercel preview URLs:"
