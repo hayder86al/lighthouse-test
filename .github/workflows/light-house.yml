@@ -20,15 +20,66 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     outputs:
-      preview-url: ${{ steps.wait-for-vercel.outputs.url }}
+      preview-url: ${{ steps.get-vercel-url.outputs.preview-url }}
     steps:
-      - name: Wait for Vercel deployment
-        uses: patrickedqvist/wait-for-vercel-preview@v1.3.1
-        id: wait-for-vercel
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          max_timeout: 600
-          check_interval: 5
+      - name: Wait for Vercel deployment and get URL
+        id: get-vercel-url
+        run: |
+          echo "Waiting for Vercel deployment to appear..."
+          sleep 45  # Give Vercel time to start deployment
+
+          # Get the commit SHA
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+          echo "Looking for deployment with commit: $COMMIT_SHA"
+
+          # Try to find the deployment URL from GitHub deployment API
+          for i in {1..24}; do  # Wait up to 12 minutes (24 * 30s)
+            echo "Attempt $i: Checking for deployment..."
+            
+            # Get deployments from GitHub API
+            DEPLOYMENTS=$(curl -s \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/deployments")
+            
+            # Find deployment for this commit
+            DEPLOYMENT_ID=$(echo "$DEPLOYMENTS" | jq -r ".[] | select(.sha == \"$COMMIT_SHA\") | .id" | head -1)
+            
+            if [ "$DEPLOYMENT_ID" != "" ] && [ "$DEPLOYMENT_ID" != "null" ]; then
+              echo "Found deployment ID: $DEPLOYMENT_ID"
+              
+              # Get deployment status
+              STATUS_RESPONSE=$(curl -s \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/deployments/$DEPLOYMENT_ID/statuses")
+              
+              # Get the target URL from the latest status
+              TARGET_URL=$(echo "$STATUS_RESPONSE" | jq -r '.[0].target_url // empty')
+              STATUS_STATE=$(echo "$STATUS_RESPONSE" | jq -r '.[0].state // empty')
+              
+              echo "Deployment state: $STATUS_STATE"
+              echo "Target URL: $TARGET_URL"
+              
+              if [ "$TARGET_URL" != "" ] && [ "$TARGET_URL" != "null" ] && [ "$STATUS_STATE" = "success" ]; then
+                echo "Deployment ready! URL: $TARGET_URL"
+                echo "preview-url=$TARGET_URL" >> $GITHUB_OUTPUT
+                exit 0
+              elif [ "$TARGET_URL" != "" ] && [ "$TARGET_URL" != "null" ]; then
+                echo "Deployment found but not ready yet. State: $STATUS_STATE"
+                echo "preview-url=$TARGET_URL" >> $GITHUB_OUTPUT
+                # Wait a bit more and then proceed anyway
+                sleep 30
+                exit 0
+              fi
+            fi
+            
+            echo "No deployment found yet, waiting..."
+            sleep 30
+          done
+
+          echo "Failed to get deployment URL after 12 minutes"
+          exit 1
 
   lighthouse:
     runs-on: ubuntu-latest
@@ -44,6 +95,25 @@ jobs:
 
       - name: Install Lighthouse CI
         run: npm install -g @lhci/cli@0.15.x
+
+      - name: Wait for site to be ready
+        run: |
+          PREVIEW_URL="${{ needs.wait-for-vercel.outputs.preview-url }}"
+          echo "Waiting for site to be ready at: $PREVIEW_URL"
+
+          # Wait for the site to respond with 200
+          for i in {1..20}; do
+            echo "Attempt $i: Checking if site is ready..."
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PREVIEW_URL" || echo "000")
+            
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Site is ready! HTTP status: $HTTP_STATUS"
+              break
+            else
+              echo "Site not ready yet. HTTP status: $HTTP_STATUS"
+              sleep 15
+            fi
+          done
 
       - name: Set Lighthouse URLs
         run: |
