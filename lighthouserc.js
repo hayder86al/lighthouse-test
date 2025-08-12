@@ -2,6 +2,12 @@ module.exports = {
   ci: {
     collect: {
       url: process.env.LIGHTHOUSE_URLS.split(","),
+      // Add Vercel protection bypass header if available
+      extraHeaders: process.env.VERCEL_PROTECTION_BYPASS
+        ? {
+            "x-vercel-protection-bypass": process.env.VERCEL_PROTECTION_BYPASS,
+          }
+        : undefined,
     },
     assert: {
       assertions: {

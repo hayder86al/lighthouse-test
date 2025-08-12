@@ -101,19 +101,34 @@ jobs:
           PREVIEW_URL="${{ needs.wait-for-vercel.outputs.preview-url }}"
           echo "Waiting for site to be ready at: $PREVIEW_URL"
 
-          # Wait for the site to respond with 200
-          for i in {1..20}; do
-            echo "Attempt $i: Checking if site is ready..."
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PREVIEW_URL" || echo "000")
+          # Try to access the site with Vercel protection bypass header
+          for i in {1..10}; do
+            echo "Attempt $i: Checking if site is accessible..."
             
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "Site is ready! HTTP status: $HTTP_STATUS"
+            # Use Vercel protection bypass header if available
+            if [ -n "${{ secrets.VERCEL_PROTECTION_BYPASS }}" ]; then
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "x-vercel-protection-bypass: ${{ secrets.VERCEL_PROTECTION_BYPASS }}" \
+                "$PREVIEW_URL" || echo "000")
+            else
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PREVIEW_URL" || echo "000")
+            fi
+            
+            echo "HTTP status: $HTTP_STATUS"
+            
+            # Accept various status codes that indicate the site is responding
+            if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "401" ] || [ "$HTTP_STATUS" = "403" ] || [ "$HTTP_STATUS" = "404" ]; then
+              echo "Site is responding (status: $HTTP_STATUS). Proceeding with Lighthouse testing..."
               break
             else
-              echo "Site not ready yet. HTTP status: $HTTP_STATUS"
-              sleep 15
+              echo "Site not responding yet. HTTP status: $HTTP_STATUS"
+              if [ $i -lt 10 ]; then
+                sleep 30
+              fi
             fi
           done
+
+          echo "Proceeding with Lighthouse testing regardless of status..."
 
       - name: Set Lighthouse URLs
         run: |
@@ -129,6 +144,7 @@ jobs:
         run: lhci autorun
         env:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+          VERCEL_PROTECTION_BYPASS: ${{ secrets.VERCEL_PROTECTION_BYPASS }}
 
       - name: Upload Lighthouse artifacts
         uses: actions/upload-artifact@v4
