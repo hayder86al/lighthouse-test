@@ -1,0 +1,90 @@
+name: Lighthouse with Vercel API
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+    branches:
+      - "main"
+  workflow_dispatch:
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.15.x
+
+      - name: Get Vercel Preview URL
+        if: github.event_name == 'pull_request'
+        id: vercel-url
+        run: |
+          # Wait for deployment and get the preview URL
+          echo "Waiting for Vercel deployment..."
+          sleep 30  # Give Vercel time to start deployment
+
+          # Get deployments for this commit
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # Retry logic to wait for deployment
+          for i in {1..20}; do
+            echo "Attempt $i: Checking for deployment..."
+            
+            # Get deployments from Vercel API (you'll need VERCEL_TOKEN secret)
+            RESPONSE=$(curl -s \
+              -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+              "https://api.vercel.com/v6/deployments?projectId=${{ secrets.VERCEL_PROJECT_ID }}&gitSource.sha=${COMMIT_SHA}&limit=1")
+            
+            # Extract deployment URL
+            DEPLOYMENT_URL=$(echo "$RESPONSE" | jq -r '.deployments[0].url // empty')
+            STATE=$(echo "$RESPONSE" | jq -r '.deployments[0].state // empty')
+            
+            if [ "$DEPLOYMENT_URL" != "" ] && [ "$STATE" = "READY" ]; then
+              echo "Deployment found and ready: https://$DEPLOYMENT_URL"
+              echo "preview-url=https://$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+              break
+            elif [ "$DEPLOYMENT_URL" != "" ]; then
+              echo "Deployment found but not ready yet. State: $STATE"
+            else
+              echo "No deployment found yet for commit $COMMIT_SHA"
+            fi
+            
+            sleep 30
+          done
+
+          if [ "$DEPLOYMENT_URL" = "" ]; then
+            echo "Failed to get deployment URL after 10 minutes"
+            exit 1
+          fi
+
+      - name: Set Lighthouse URLs
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            # For PR: Use the Vercel preview URL from API
+            PREVIEW_URL="${{ steps.vercel-url.outputs.preview-url }}"
+            echo "LIGHTHOUSE_URLS=${PREVIEW_URL}" >> $GITHUB_ENV
+            echo "Testing Vercel preview URL: ${PREVIEW_URL}"
+          else
+            # For main branch: Use production URL
+            echo "LIGHTHOUSE_URLS=https://lighthouse-test-hayder86als-projects.vercel.app" >> $GITHUB_ENV
+            echo "Testing production URL"
+          fi
+
+      - name: Run Lighthouse CI with Assertions
+        run: lhci autorun
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+
+      - name: Upload Lighthouse artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighthouse-reports
+          path: .lighthouseci/

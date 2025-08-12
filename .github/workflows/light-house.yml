@@ -7,34 +7,47 @@ on:
     branches:
       - "main"
   workflow_dispatch:
+
 jobs:
+  # Wait for Vercel deployment to complete
+  wait-for-vercel:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      preview-url: ${{ steps.wait-for-vercel.outputs.url }}
+    steps:
+      - name: Wait for Vercel deployment
+        uses: patrickedqvist/wait-for-vercel-preview@v1.3.1
+        id: wait-for-vercel
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          max_timeout: 600
+          check_interval: 5
+
   lighthouse:
     runs-on: ubuntu-latest
+    needs: [wait-for-vercel]
+    if: github.event_name == 'pull_request' && needs.wait-for-vercel.result == 'success' && needs.wait-for-vercel.outputs.preview-url != ''
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "18"
+
       - name: Install Lighthouse CI
         run: npm install -g @lhci/cli@0.15.x
 
-      # Set URLs based on context (simpler approach)
       - name: Set Lighthouse URLs
         run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            # For PR: Use Vercel preview URL pattern
-            BRANCH_NAME="${{ github.head_ref }}"
-            # Replace special characters and convert to lowercase for Vercel URL
-            BRANCH_SLUG=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9-]/-/g' | tr '[:upper:]' '[:lower:]')
-            BASE_URL="https://lighthouse-test-git-${BRANCH_SLUG}-hayder86als-projects.vercel.app"
-            echo "LIGHTHOUSE_URLS=${BASE_URL}/,${BASE_URL}/handla/mobiltelefoner,${BASE_URL}/support" >> $GITHUB_ENV
-            echo "Testing deployment URL: ${BASE_URL}"
-          else
-            # For main branch: Use production URLs
-            echo "LIGHTHOUSE_URLS=https://tre.se/,https://www.tre.se/handla/mobiltelefoner,https://www.tre.se/support" >> $GITHUB_ENV
-            echo "Testing production URLs"
-          fi
+          # Use the actual Vercel preview URL from the previous job
+          PREVIEW_URL="${{ needs.wait-for-vercel.outputs.preview-url }}"
+          # Test both home page and support page
+          echo "LIGHTHOUSE_URLS=${PREVIEW_URL},${PREVIEW_URL}/support" >> $GITHUB_ENV
+          echo "Testing Vercel preview URLs:"
+          echo "  - Home page: ${PREVIEW_URL}"
+          echo "  - Support page: ${PREVIEW_URL}/support"
 
       - name: Run Lighthouse CI with Assertions
         run: lhci autorun
