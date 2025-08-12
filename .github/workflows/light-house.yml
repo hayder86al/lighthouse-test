@@ -3,22 +3,143 @@ on:
   push:
     branches:
       - "main"
+  pull_request:
+    branches:
+      - "main"
   workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: read
+  statuses: read
+  checks: read
+
 jobs:
   lighthouse:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "18"
+
       - name: Install Lighthouse CI
         run: npm install -g @lhci/cli@0.15.x
+
+      - name: Wait for Vercel deployment and get URL
+        id: get-vercel-url
+        run: |
+          echo "Waiting for Vercel deployment to appear..."
+          sleep 45  # Give Vercel time to start deployment
+
+          # Get the commit SHA
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+          echo "Looking for deployment with commit: $COMMIT_SHA"
+
+          # Try to find the deployment URL from GitHub deployment API
+          for i in {1..24}; do  # Wait up to 12 minutes (24 * 30s)
+            echo "Attempt $i: Checking for deployment..."
+            
+            # Get deployments from GitHub API
+            DEPLOYMENTS=$(curl -s \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/deployments")
+            
+            # Find deployment for this commit
+            DEPLOYMENT_ID=$(echo "$DEPLOYMENTS" | jq -r ".[] | select(.sha == \"$COMMIT_SHA\") | .id" | head -1)
+            
+            if [ "$DEPLOYMENT_ID" != "" ] && [ "$DEPLOYMENT_ID" != "null" ]; then
+              echo "Found deployment ID: $DEPLOYMENT_ID"
+              
+              # Get deployment status
+              STATUS_RESPONSE=$(curl -s \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/deployments/$DEPLOYMENT_ID/statuses")
+              
+              # Get the target URL from the latest status
+              TARGET_URL=$(echo "$STATUS_RESPONSE" | jq -r '.[0].target_url // empty')
+              STATUS_STATE=$(echo "$STATUS_RESPONSE" | jq -r '.[0].state // empty')
+              
+              echo "Deployment state: $STATUS_STATE"
+              echo "Target URL: $TARGET_URL"
+              
+              if [ "$TARGET_URL" != "" ] && [ "$TARGET_URL" != "null" ] && [ "$STATUS_STATE" = "success" ]; then
+                echo "Deployment ready! URL: $TARGET_URL"
+                echo "preview-url=$TARGET_URL" >> $GITHUB_OUTPUT
+                break
+              elif [ "$TARGET_URL" != "" ] && [ "$TARGET_URL" != "null" ]; then
+                echo "Deployment found but not ready yet. State: $STATUS_STATE"
+                echo "preview-url=$TARGET_URL" >> $GITHUB_OUTPUT
+                # Wait a bit more and then proceed anyway
+                sleep 30
+                break
+              fi
+            fi
+            
+            echo "No deployment found yet, waiting..."
+            sleep 30
+          done
+
+          if [ -z "$TARGET_URL" ] || [ "$TARGET_URL" = "null" ]; then
+            echo "Failed to get deployment URL after 12 minutes"
+            exit 1
+          fi
+
+      - name: Wait for site to be ready
+        run: |
+          PREVIEW_URL="${{ steps.get-vercel-url.outputs.preview-url }}"
+          echo "Waiting for site to be ready at: $PREVIEW_URL"
+
+          # Try to access the site with Vercel protection bypass header
+          for i in {1..10}; do
+            echo "Attempt $i: Checking if site is accessible..."
+            
+            # Use Vercel protection bypass header if available
+            if [ -n "${{ secrets.VERCEL_PROTECTION_BYPASS }}" ]; then
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "x-vercel-protection-bypass: ${{ secrets.VERCEL_PROTECTION_BYPASS }}" \
+                "$PREVIEW_URL" || echo "000")
+            else
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PREVIEW_URL" || echo "000")
+            fi
+            
+            echo "HTTP status: $HTTP_STATUS"
+            
+            # Accept various status codes that indicate the site is responding
+            if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "401" ] || [ "$HTTP_STATUS" = "403" ] || [ "$HTTP_STATUS" = "404" ]; then
+              echo "Site is responding (status: $HTTP_STATUS). Proceeding with Lighthouse testing..."
+              break
+            else
+              echo "Site not responding yet. HTTP status: $HTTP_STATUS"
+              if [ $i -lt 10 ]; then
+                sleep 30
+              fi
+            fi
+          done
+
+          echo "Proceeding with Lighthouse testing regardless of status..."
+
+      - name: Set Lighthouse URLs
+        run: |
+          # Use the actual Vercel preview URL from the previous step
+          PREVIEW_URL="${{ steps.get-vercel-url.outputs.preview-url }}"
+          # Test both home page and support page
+          echo "LIGHTHOUSE_URLS=${PREVIEW_URL},${PREVIEW_URL}/support" >> $GITHUB_ENV
+          echo "Testing Vercel preview URLs:"
+          echo "  - Home page: ${PREVIEW_URL}"
+          echo "  - Support page: ${PREVIEW_URL}/support"
+
       - name: Run Lighthouse CI with Assertions
         run: lhci autorun
         env:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+          VERCEL_PROTECTION_BYPASS: ${{ secrets.VERCEL_PROTECTION_BYPASS }}
+
       - name: Upload Lighthouse artifacts
         uses: actions/upload-artifact@v4
         if: always()
